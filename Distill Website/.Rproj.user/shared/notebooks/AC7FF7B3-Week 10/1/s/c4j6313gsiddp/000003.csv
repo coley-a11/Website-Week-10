@@ -1,7 +1,0 @@
-"0","report::report(lm1)
-"
-"1","We fitted a linear model (estimated using OLS) to predict GPA with Time (formula: GPA ~ Time). The model explains a statistically significant and moderate proportion of variance (R2 = 0.21, F(1, 1198) = 325.34, p < .001, adj. R2 = 0.21). The model's intercept, corresponding to Time = 0, is at 2.60 (95% CI [2.56, 2.63], t(1198) = 145.65, p < .001). Within this model:
-
-  - The effect of Time is statistically significant and positive (beta = 0.11, 95% CI [0.09, 0.12], t(1198) = 18.04, p < .001; Std. beta = 0.46, 95% CI [0.41, 0.51])
-
-Standardized parameters were obtained by fitting the model on a standardized version of the dataset."
