@@ -1,0 +1,369 @@
+---
+title: "Week 9"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+### Libraries
+library("tidyverse")
+library("patchwork")
+library("lubridate")
+library("kableExtra")
+library("gtsummary")
+library("lubridate")
+library("equatiomatic")
+library("ggdag")
+library("brms")
+library("rstan")
+library("rstanarm")
+library("bayesplot")
+library("easystats")
+library("kableExtra")
+library("broom")
+library("tidybayes")
+library("bmlm")
+# if (!require(tidyLPA)) {
+#   install.packages("tidyLPA")
+# }
+# rstan options
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores ())
+```
+
+```{r reading data, include=FALSE}
+nz_0 <- as.data.frame(readr::read_csv2(
+  url(
+    "https://raw.githubusercontent.com/go-bayes/psych-447/main/data/nzj.csv"
+  )
+))
+
+# to relevel kessler 6 variables
+f <-
+  c(
+    "None Of The Time",
+    "A Little Of The Time",
+    "Some Of The Time",
+    "Most Of The Time",
+    "All Of The Time"
+  )
+
+# get data into shape
+nz_cr <- nz_0 %>%
+  dplyr::mutate_if(is.character, factor) %>%
+  select(
+    -c(
+      SWB.Kessler01,
+      SWB.Kessler02,
+      SWB.Kessler03,
+      SWB.Kessler04,
+      SWB.Kessler05,
+      SWB.Kessler06
+    )
+  ) %>%
+  dplyr::mutate(Wave = as.factor(Wave)) %>%
+  dplyr::mutate(FeelHopeless = forcats::fct_relevel(FeelHopeless, f)) %>%
+  dplyr::mutate(FeelDepressed = forcats::fct_relevel(FeelDepressed, f)) %>%
+  dplyr::mutate(FeelRestless = forcats::fct_relevel(FeelRestless, f)) %>%
+  dplyr::mutate(EverythingIsEffort = forcats::fct_relevel(EverythingIsEffort, f)) %>%
+  dplyr::mutate(FeelWorthless = forcats::fct_relevel(FeelWorthless, f)) %>%
+  dplyr::mutate(FeelNervous = forcats::fct_relevel(FeelNervous, f)) %>%
+  dplyr::mutate(Wave = as.factor(Wave)) %>%
+  dplyr::mutate(male_id = as.factor(Male)) %>%
+  dplyr::mutate(date = make_date(year = 2009, month = 6, day = 30) + TSCORE) %>%
+  dplyr::mutate(
+    FeelWorthless_int = as.integer(FeelWorthless),
+    FeelNervous_int =  as.integer(FeelNervous),
+    FeelHopeless_int =  as.integer(FeelHopeless),
+    EverythingIsEffort_int =  as.integer(EverythingIsEffort),
+    FeelRestless_int =  as.integer(FeelRestless),
+    FeelDepressed_int =  as.integer(FeelDepressed),
+    HLTH.Fatigue_int = as.integer(HLTH.Fatigue + 1)
+  ) %>%
+  dplyr::mutate(yearS = TSCORE - min(TSCORE, na.rm = TRUE)) %>%
+  dplyr::mutate(KESSLER6sum = as.integer(KESSLER6sum))
+
+## 2018 only data
+nz2018 <- nz_cr %>%
+  dplyr::filter(Wave == 2018)
+
+## 2019 only timeline
+# Relevel covid timeline 2019
+ord_dates_class_2019_only <- c("PreCOVID",
+                               "JanFeb",
+                               "EarlyMarch",
+                               "Lockdown",
+                               "PostLockdown")
+
+nz2019 <- nz_cr %>%
+  dplyr::filter(YearMeasured == 1) %>%
+  dplyr::filter(Wave == 2019) %>%
+  dplyr::group_by(Id) %>%
+  dplyr::ungroup(Id) %>%
+  dplyr::mutate(Covid_Timeline_cr =
+                  as.factor(ifelse(
+                    TSCORE %in% 3896:3921,
+                    # feb 29 - march 25th
+                    "EarlyMarch",
+                    ifelse(
+                      TSCORE %in% 3922:3954,
+                      "Lockdown",
+                      #march 26- Mon 27 April 2020
+                      ifelse(
+                        TSCORE > 3954,
+                        # after april 27th 20202
+                        "PostLockdown",
+                        ifelse(TSCORE %in% 3842:3895,
+                               # jan 6 to feb 28
+                               "JanFeb",
+                               "PreCOVID")
+                      )
+                    )
+                  ))) %>%
+  dplyr::mutate(Covid_Timeline_cr = forcats::fct_relevel(Covid_Timeline_cr, ord_dates_class_2019_only))
+
+## 2018/2019 data set  
+ord_dates_class <- c("Baseline",
+                     "PreCOVID",
+                     "JanFeb",
+                     "EarlyMarch",
+                     "Lockdown",
+                     "PostLockdown")
+
+nzl <- nz_cr %>%
+  dplyr::filter(YearMeasured == 1) %>%
+  dplyr::filter(Wave == 2018 | Wave == 2019) %>%
+  dplyr::group_by(Id) %>%
+  dplyr::filter(n() > 1) %>%
+  dplyr::filter(n() != 0) %>%
+  dplyr::ungroup(Id) %>%
+  dplyr::mutate(yearS = (TSCORE - min(TSCORE)/365)) %>%
+  dplyr::mutate(WSCORE = as.factor(WSCORE)) %>%
+  dplyr::mutate(Covid_Timeline =
+                  as.factor(ifelse(
+                    TSCORE %in% 3896:3921,
+                    # feb 29 - march 25th
+                    "EarlyMarch",
+                    ifelse(
+                      TSCORE %in% 3922:3954,
+                      "Lockdown",
+                      #march 26- Mon 27 April 2020
+                      ifelse(
+                        TSCORE > 3954,
+                        # after april 27th 20202
+                        "PostLockdown",
+                        ifelse(
+                          TSCORE %in% 3842:3895,
+                          # jan 6 to feb 28
+                          "JanFeb",
+                          ifelse(TSCORE %in% 3665:3841 &
+                                   Wave == 2019,
+                                 "PreCOVID",
+                                 "Baseline"  # 3672 TSCORE or  20 July 2019))))))))
+                          )
+                        )
+                      )
+                    ))))%>%
+  dplyr::mutate(Covid_Timeline = forcats::fct_relevel(Covid_Timeline, ord_dates_class))
+```
+
+```{r data frame set up, include=FALSE}
+# relabeling dates such that they are PreCOVID (2019) and during covid/lockdowns (2020)
+# this will be used in a t-test to see if they differ before and after covid
+ord_dates_class_2019a_only <- c("PreCOVID",
+                               "COVID")
+nz2019a <- nz_cr %>%
+  dplyr::filter(YearMeasured == 1) %>%
+  dplyr::filter(Wave == 2019) %>%
+  dplyr::group_by(Id) %>%
+  dplyr::ungroup(Id) %>%
+  dplyr::mutate(Covid_Timeline_cr =
+                  as.factor(ifelse(
+                        TSCORE < 3842,
+                        "PreCOVID", "COVID"))) %>%
+  dplyr::mutate(Covid_Timeline_cr = forcats::fct_relevel(Covid_Timeline_cr, ord_dates_class_2019a_only))
+
+# dataframe for testing if weight differed after lockdown
+df <- nz2019[,c(4,5,23,24,37,79,76)]
+# dataframe for testing preliminary t-test
+df1 <- nz2019a[,c(4,5,23,24,37,79,76)]
+```
+
+# Did people gain Weight over the COVID-19 Lockdown?
+
+NZ's COVID-19 lockdown began mid March 2020 and ended April 27^th^ 2020. During this time people were isolated at their homes with public places being closed. This lockdown was associated with high amounts of stress and difficulty for many stuck at home. Due to gyms being closed and increases in personal stress/depression leading to stress eating, it is possible that the average weight of an individual has increased from March 2020 to May 2020.
+
+To answer this question, it is a good idea to ask what is the best measure of weight gain. The data used includes both the weight of participants (in kilograms) and the BMI (body mass index) of the participant. While these are correlated measures (*r* = 0.85), it may be more beneficial to use BMI as opposed to weight. This is due to BMI being a measure of an individuals weight based on their height and gender. A very tall person is more likely to weigh more than a very short person, but the level to which weight gain is detrimental for that individual will be different. Due to this, increases in BMI indicate an increase in weight based on the individuals baseline, and therefore will be more indicative of any detrimental effects from this weight gain.[^1]
+
+[^1]: There are many problems with BMI as well, but for the purposes of this report it is the best indicator that we have
+
+For the purposes of our preliminary analyses, we will investigate both BMI and Weight. If there appears to be no differences between these measures we will proceed with BMI. As you can see in Figure One, BMI and Weight appear to have similar means and spread across the 5 timepoints. Furthermore, within each plot, boxes overlap each other, indicating that there may not be any differences in means.
+
+```{r preliminary boxplots, echo=FALSE, fig.cap = "*Figure One* - Boxplots of Weight and BMI over 5 timepoints reflecting different stages of COVID-19", message=FALSE, warning=FALSE}
+# plotting mean weights
+plot1 <- ggplot(df, aes(x=Covid_Timeline_cr, y = HLTH.Weight))+
+  geom_boxplot()
+plot2 <- ggplot(df, aes(x=Covid_Timeline_cr, y = HLTH.BMI))+
+  geom_boxplot()
+plot1/plot2 
+```
+
+```{r descriptives and priliminary graphs, echo=FALSE, message=FALSE, warning=FALSE}
+# getting the means and sd of weight and BMI across all 5 COVID timepoints
+d1 <- df %>% 
+  group_by(Covid_Timeline_cr) %>% 
+  summarise(mean_weight = mean(HLTH.Weight, na.rm = TRUE),
+            sd_weight = sd(HLTH.Weight, na.rm = TRUE),
+            mean_BMI = mean(HLTH.BMI, na.rm = TRUE),
+            sd_BMI = sd(HLTH.BMI, na.rm = TRUE)) %>% 
+  mutate(mean_weight = round(mean_weight, 2),
+         sd_weight = round(sd_weight, 2),
+         mean_BMI = round(mean_BMI, 2),
+         sd_BMI = round(sd_BMI, 2))
+# key for writing means/sd in report
+    #1 = PC, 2 = janfeb, 3 = march 4 = lockdown, 5 = post
+    #,2 = mean weight, ,3 = sdweight, ,4 = meanBMI, ,5 = sdBMI
+
+# getting the means and sd of weight and BMI prior to the outbreak of COVID and after the lockdown
+d2 <- df1 %>% 
+  group_by(Covid_Timeline_cr) %>% 
+  summarise(mean_weight = mean(HLTH.Weight, na.rm = TRUE),
+            sd_weight = sd(HLTH.Weight, na.rm = TRUE),
+            mean_BMI = mean(HLTH.BMI, na.rm = TRUE),
+            sd_BMI = sd(HLTH.BMI, na.rm = TRUE)) %>% 
+  mutate(mean_weight = round(mean_weight, 2),
+         sd_weight = round(sd_weight, 2),
+         mean_BMI = round(mean_BMI, 2),
+         sd_BMI = round(sd_BMI, 2))
+```
+
+As a preliminary analysis, we will investigate whether the mean weight of participants differs from Pre-COVID (end of 2019) to Post-COVID lockdowns. We will investigate this with a t.test. The mean weight of an individual prior to the outbreak of COVID-19 is lower (*M* = `r d2[1,2]`, *SD* = `r d2[1,3]`) than the mean weight of an individual after COVID-19 lockdown (*M* = `r d2[2,2]`, *SD* = `r d2[2,3]`). Additionally, the mean BMI of an individual is lower prior to the outbreak of COVID-19 (*M* = `r d2[1,4]`, *SD* = `r d2[1,5]`) than after the COVID-19 lockdown (*M* = `r d2[2,4]`, *SD* = `r d2[2,5]`). A t-test indicated that individuals weight prior to COVID-19 was significantly lower than their weight after COVID-19 lockdowns (*t*(3943) = -2.26, *p* = 0.02). A similar result was found for BMI, such that BMI scores were significantly lower prior to the outbreak of COVID-19 than after the COVID-19 lockdown (*t*(5818) = 125, *p* \< .001). As these two tests have come to a similar conclusion, we will use BMI as our indicator as to whether people gained weight over the COVID-19 lockdown.
+
+```{r t.tests and correlation, include=FALSE}
+# t.test to see if mean weight differs significantly from PreCOVID (2019) to weights during covid/lockdown and after (2020)
+t.test(HLTH.Weight~Covid_Timeline_cr, data = df1)
+t.test(HLTH.BMI~Covid_Timeline_cr, data = df1)
+
+#  both BMI + weight show significant difference between timepoints
+# testing to see if weight and BMI are correlated
+cor.test(df$HLTH.BMI, df$HLTH.Weight, 
+                    method = "pearson")
+# they are correlated and due to this will use BMI from here out as it is more accurate form of "weight gain"
+```
+
+# Predicting BMI from COVID-19 timepoints (Model 1)
+
+First we will start by predicting BMI scores by when the data was obtained throughout the COVID-19 pandemic. As can be seen in Figure Two, Post-lockdown is a significant predictor of BMI scores and has a positive influence on BMI scores (beta = 0.69, 95% CI [0.23, 1.15], t(5815) = 2.96, *p* \< .01; Std. beta = 0.12, 95% CI [0.04, 0.20]). All other time points had a non-significant influence on BMI scores. This indicates an individual who was sampled prior to the end of the COVID-19 lockdown (2019-27/04/2020) will have an average predicted BMI of 27.25. Those sampled after this time period will have an average predicted BMI of 27.94.
+
+This model (`BMI` \~ `Covid_19`) is significant, however only explains a small proportion of the variance in BMI scores (R^2^ = 0.00185). Therefore, it would be interesting to see if other predictors help explain more variance than just the COVID time points alone. Doing further tests on this model, when analyzing significant pair-wise comparisons between timepoints, the only significant difference is between PreCOVID (2019) and post lockdown (after April 27^th^ 2020), which explains the significant difference seen during the preliminary t-tests.
+
+```{r echo=FALSE, fig.cap = "*Figure Two* - COVID-19 timepoints as predictors of BMI"}
+# regression covid timepoints on BMI
+model1 <- lm(HLTH.BMI ~ Covid_Timeline_cr, data = df)
+sjPlot::plot_model(model1)
+```
+
+*Table One* - Estimates from Model 1 predicting BMI
+
+```{r echo=FALSE}
+sjPlot::tab_model(model1)
+```
+
+```{r include=FALSE}
+fit1 <- aov(HLTH.BMI ~ Covid_Timeline_cr, data = df)
+TukeyHSD(fit1)
+
+# Means for scaled measures
+mean(df$Age, na.rm = TRUE)
+mean(df$Hours.Exercise, na.rm = TRUE)
+mean(df$FeelDepressed_int, na.rm = TRUE)
+```
+
+# Predicting BMI from variables likely to impact BMI scores (Model 2)
+
+When investigating the other factors that may be related to COVID-19, two particular variables stand out, hours spent exercising `Hours.Exercise` and individual levels of depression `FeelDepressed`. Over the lockdown, gyms were closed and the only method of exercise for most people was from their own home. Due to this, I would predict that over the COVID timeline, the amount of exercise would decrease. Simiarly, due to this increase in stress from the pandemic and lockdowns alike, I would predict that levels of depression would also tend to increase.
+
+As we can see from Figure Three, this doesn't appear to be particularly true. Although during lockdown (`Lockdown`) the boxplot for exercise appears to be smaller, indicating less spread around the mean. Despite this, we will now investigate the influence of exercise and depression on BMI levels, as well as gender and age of the individual.
+
+In this model (formula: `HLTH.BMI` \~ `Age` + `Male` + `exercise_s` + `FeelDepressed_int`) the only non-significant effect on BMI comes from Gender. This is to be predicted as BMI is a measure that takes into account gender as well as the height and weight of an individual. Despite this, the effect of age was statistically significant and positive (beta = 0.60, 95% CI [0.45, 0.76], t(5623) = 7.64, *p* \< .001; Std. beta = 0.10, 95% CI [0.08, 0.13]), the effect of exercise was statistically significant and negative (beta = -0.58, 95% CI [-0.73, -0.42], t(5623) = -7.28, *p* \< .001; Std. beta = -0.10, 95% CI [-0.12, -0.07]) and the effect of feelings of depression was statistically significant and positive (beta = 0.99, 95% CI [0.79, 1.19], t(5623) = 9.51, *p* \< .001; Std. beta = 0.13, 95% CI [0.10, 0.15]).
+
+From this we can conclude that the expected BMI for an individual that is \~52 years old (mean age in sample) who exercises for \~6 hours (mean in sample) and scores \~1.44 on the depression scale (mean in sample) will have a BMI score of 26.19. For every standard unit increase in age, BMI will increase by 0.60, for a standard unit increase in the time spent exercising, BMI will decrease by a similar amount (0.58) and for a standard unit increase in feelings of depression, BMI will increase by 0.99 units.
+
+This model predicts 3.1% of the variance in BMI scores (R^2^ = 0.031), which is greater than the amount of variance explained purely by time during COVID-19 (Model 1).
+
+```{r echo=FALSE, fig.cap = "*Figure Three* - COVID-19 timepoints and changes in time spent exercising and feelings of depression", message=FALSE, warning=FALSE}
+#scaling exercise due to the large amount of variability in the dataset
+df['exercise_s'] <- as.data.frame(scale(df$Hours.Exercise))
+df['age_s'] <- as.data.frame(scale(df$Age))
+
+#plotting exercise and feelings of depression over the COVID-19 timeline
+plot3 <- ggplot(df, aes(x=Covid_Timeline_cr, y = exercise_s))+
+  geom_boxplot()
+plot4 <- ggplot(df, aes(x=Covid_Timeline_cr, y = FeelDepressed_int))+
+  geom_boxplot()
+plot3+plot4
+```
+
+```{r echo=FALSE, fig.cap = "*Figure Four* - Covid influenced factors as predictors of BMI"}
+# seeing if the model with other predictors explains more variance than COVID timepoints
+model2 <- lm(HLTH.BMI ~ age_s + Male + exercise_s + FeelDepressed_int , data = df)
+#summary(model2) #explains a much larger amount of the variance in BMI than just covid timepoints
+#report::report(model2)
+
+sjPlot::plot_model(model2)
+```
+
+*Table Two* - Estimates from Model 2 predicting BMI
+
+```{r echo=FALSE}
+sjPlot::tab_model(model2)
+```
+
+# Predicting BMI from from all variables used thus far and finding the best model
+
+Both models previously used indicate that gender is not a significant predictor of BMI scores in this sample. Due to this, we will remove it from all future models. Next we will test all predictor variables (minus gender) as predicting BMI.
+
+## Model 3 - BMI predicted by Age, Exercise, Feelings of Depression and COVID Timepoints
+
+Like previous models, this model (formula: `HLTH.BMI` \~ `age_s` + `exercise_s` + `FeelDepressed_int` + `Covid_Timeline_cr`) explained a weak amount of variation in BMI scores (R^2^ = 0.03, F(7, 5644) = 27.18, *p* \< .001, adj. R2 = 0.03). All predictor variables were statistically significant. From this we can conclude that the expected BMI for an individual that is \~52 years old, who exercises for \~6 hours, scores \~1.44 on the depression scale, and has completed the survey prior to April 27^th^ 2020 will have a BMI score of 25.85. For every standard unit increase in age, BMI will increase by 0.61, for a standard unit increase in the time spent exercising, BMI will decrease by a similar amount (0.56) and for a standard unit increase in feelings of depression, BMI will increase by 0.99 units. Further, those surveyed after April 27^th^ 2020 will have an increased BMI score by 0.75. These values are all very similar to Model 2.
+
+```{r echo=FALSE, fig.cap = "Figure Five* - Predicting BMI from all predictors"}
+model3 <- lm(HLTH.BMI ~ age_s + exercise_s + FeelDepressed_int + Covid_Timeline_cr, data = df)
+sjPlot::plot_model(model3)
+```
+
+*Table Three* - Estimates from Model 3 predicting BMI
+
+```{r echo=FALSE}
+sjPlot::tab_model(model3)
+```
+
+## Additional Models
+
+From here, we will investigate if removing predictors will improve the model without removing too much of the explained variance. Model 4 (formula: `HLTH.BMI` \~ `age_s` + `exercise_s`) explains 1.4% of the variance in BMI scores, Model 5 (formula: `HLTH.BMI` \~ `age_s` + `exercise_s`+ `Covid_Timeline_cr`) explains 1.6% of the variance in BMI scores. This indicates that removing feelings of depression (Model 3 - Model 5) reduces a large amount of the variation explained in BMI scores. Whereas, when comparing Model 3 to Model 2 (where the only change is COVID timeline information) the removal of COVID-19 timeline information does not alter the varaince explained by the model to an extreme extent.
+
+From Figure Six, we can see that Model 2 and 3 score very similarly when checking the performance. If we were to only choose between these two models, we would determine that Model 2 is the best model for predicting BMI as;
+
+a)  It explains more variance (marginally) than Model 3
+b)  Performs better on 4/6 performance checks
+c)  Is the simplest model out of the two high performing models
+
+Figure Seven compares Model 2 to the models investigated where some predictors were removed. From this plot we can see that when predicting BMI from this dataset, the best predictors to use include age, hours spent exercising and feelings of depression. When these predictors are in the model, COVID timeline information predicts redundant variance in BMI scores
+
+```{r include=FALSE}
+model4 <- lm(HLTH.BMI ~ age_s + exercise_s, data = df)
+model5 <- lm(HLTH.BMI ~ age_s + exercise_s + Covid_Timeline_cr, data = df)
+model6 <- lm(HLTH.BMI ~ age_s, data = df)
+```
+
+```{r echo=FALSE, fig.cap = "*Figure Six* - Comparing Performance of Model 1, 2 and 3", message=FALSE, warning=FALSE}
+per_home <-performance::compare_performance(model1,model2,model3)
+plot(per_home)
+```
+
+```{r echo=FALSE, fig.cap = "*Figure Seven* - Comparing Performance of Model 2, 4, 5, and 6", message=FALSE, warning=FALSE}
+per_home_2 <-performance::compare_performance(model2,model4,model5,model6)
+plot(per_home_2)
+```
+# Conclusion  
+
+To conclude, these analyses showed that on average, people sampled prior to April 27^th^ 2020 had a BMI smaller than those sampled after this date. From this we can conclude that on average, during the outbreak of the COVID-19 pandemic and subsequent lockdown, people in New Zealand tended to gain weight (by approximately 1kg, BMI change of 0.5). Despite people on average putting on more weight over this time, when age, time spent exercising and feelings of depression were used to predict BMI scores, COVID timeline information did not explain a large amount more variation in BMI scores.
